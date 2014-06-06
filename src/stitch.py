@@ -1,18 +1,21 @@
 import numpy
 import cv2
  
-import sys
-from matplotlib import pyplot as plt
  
+######################################################
+# Util 
+######################################################
+def showImage(img, title = '', scale = 1 ):
+    cv2.imshow(title,cv2.resize(img,(0,0),fx = scale, fy = scale))
+
 ###############################################################################
 # Image Matching
 ###############################################################################
 
 def match_images(img1, img2):
     """Given two images, returns the matches"""
-    detector = cv2.SURF(5000, 5, 5, upright = True)
+    detector = cv2.SURF(5000, 5, 5, upright = True)  # @UndefinedVariable
     matcher = cv2.BFMatcher(cv2.NORM_L2)
- 
     kp1, desc1 = detector.detectAndCompute(img1, None)
     kp2, desc2 = detector.detectAndCompute(img2, None)
     print 'img1 - %d features, img2 - %d features' % (len(kp1), len(kp2))
@@ -39,10 +42,9 @@ def filter_matches(kp1, kp2, matches, ratio=0.75):
 def explore_match(win, img1, img2, kp_pairs, status=None, H=None):
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
-    vis = numpy.zeros((h1 + h2, max(w1, w2)), numpy.uint8)
-    vis[:h1, :w1] = img1
-    vis[h1:h1 + h2, :w2] = img2
-    vis = cv2.cvtColor(vis, cv2.COLOR_GRAY2BGR)
+    vis = numpy.zeros((h1 + h2, max(w1, w2),3), numpy.uint8)
+    vis[:h1, :w1,:] = img1
+    vis[h1:h1 + h2, :w2,:] = img2
  
     if H is not None:
         corners = numpy.float32([[0, 0], [w1, 0], [w1, h1], [0, h1]])
@@ -76,39 +78,25 @@ def explore_match(win, img1, img2, kp_pairs, status=None, H=None):
         if inlier:
             cv2.line(vis, (x1, y1), (x2, y2), green, thickness = 10)
  
-    plt.imshow(vis), plt.show()
+    showImage(vis,'matches',0.1)
     
     
-def merge_images(image1, image2, homography, size, offset):
+def warpTwoImages(img1, img2, H):
+    '''warp img2 to img1 with homograph H'''
+    h1,w1 = img1.shape[:2]
+    h2,w2 = img2.shape[:2]
+    pts1 = numpy.float32([[0,0],[0,h1],[w1,h1],[w1,0]]).reshape(-1,1,2)
+    pts2 = numpy.float32([[0,0],[0,h2],[w2,h2],[w2,0]]).reshape(-1,1,2)
+    pts2_ = cv2.perspectiveTransform(pts2, H)
+    pts = numpy.concatenate((pts1, pts2_), axis=0)
+    [xmin, ymin] = numpy.int32(pts.min(axis=0).ravel() - 0.5)
+    [xmax, ymax] = numpy.int32(pts.max(axis=0).ravel() + 0.5)
+    t = [-xmin,-ymin]
+    Ht = numpy.array([[1,0,t[0]],[0,1,t[1]],[0,0,1]]) # translate
 
-  ## Combine the two images into one.
-  panorama = cv2.warpPerspective(image2,homography,size)
-  (h1, w1) = image1.shape[:2]
-
-  for h in range(h1):
-    for w in range(w1):
-        if image1[h][w][0] != 0 or image1[h][w][3] != 0 or image1[h][w][4] != 0:
-            panorama[h+offset[1]][w + offset[0]] = image1[h][w]
-
-  return panorama
-  
-def calculate_size(img1, img2, homography):
-    ## Calculate the size and offset of the stitched panorama.
-    h1, w1 = img1.shape[:2]
-    h2, w2 = img2.shape[:2]
-
-    offset = abs((homography*(w2-1,h2-1,1))[0:2,2]) 
-    print offset
-    size   = (h1 + int(offset[0]), w1 + int(offset[1]))
-    if (homography*(0,0,1))[0][1] > 0:
-        offset[0] = 0
-    if (homography*(0,0,1))[1][2] > 0:
-        offset[1] = 0
-
-    ## Update the homography to shift by the offset
-    homography[0:2,2] +=  offset
-    return (size, offset)  
-  
+    result = cv2.warpPerspective(img2, Ht.dot(H), (xmax-xmin, ymax-ymin))
+    result[t[1]:h1+t[1],t[0]:w1+t[0]] = img1
+    return   result;
   
 def draw_matches(window_name, kp_pairs, img1, img2):
     """Draws the matches for """
@@ -127,28 +115,18 @@ def draw_matches(window_name, kp_pairs, img1, img2):
     if len(p1):
         explore_match(window_name, img1, img2, kp_pairs, status, H)
         
-    if H is not None:
-        h1, w1 = img1.shape[:2]
-        h2, w2 = img2.shape[:2]
-        w1 = w1*2
-        base_img_warp = cv2.warpPerspective(img1, H, (w1,h1))
-        print "Warped base image"
-        for h in range(h2):
-            for w in range(w2):
-                if base_img_warp[h][w] <=0:
-                    base_img_warp[h][w] = img2[h][w]
-                    
-        #size,offset = calculate_size(img1, img2, H)
-        #merge_images(img1, img2, H, size, offset)
-        plt.imshow(base_img_warp), plt.show()
+        
+    result = warpTwoImages(img2, img1, H)
+    showImage(result,scale = 0.2)
     
+
 ###############################################################################
 # Main
 ###############################################################################
 if __name__ == '__main__':
     
-    img1 = cv2.imread('/home/arthur/workspaces/imagesync/Sticher/src/IMG_5410.JPG', 0)  # queryImage
-    img2 = cv2.imread('/home/arthur/workspaces/imagesync/Sticher/src/IMG_5412.JPG', 0)  # trainImage
+    img1 = cv2.imread('IMG_5410.JPG')  # queryImage
+    img2 = cv2.imread('IMG_5412.JPG')  # trainImage
 
     kp_pairs = match_images(img1, img2)
     
@@ -157,3 +135,9 @@ if __name__ == '__main__':
     else:
         print "No matches found"
     print 'finished'
+    
+    while True:
+        k = cv2.waitKey(5) & 0xFF
+        if k == 27:
+            break
+    cv2.destroyAllWindows()
